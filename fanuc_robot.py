@@ -7,7 +7,7 @@ import time
 import trimesh
 from scipy.spatial.transform import Rotation as R
 import numpy as np
-import cv2
+# import cv2
 # import rospy
 import os, time
 from datetime import datetime
@@ -103,46 +103,55 @@ class RobotController(object):
 
     # ----------------------------------
     def moveToJointPos(self, target_joint_pos, block=True):
-        target = np.rad2deg(target_joint_pos).astype('d').tobytes()
-        self.s_out.sendto(target, (self.udp_ip_out, self.udp_port_out_arm))
+        if not simulation_only:
+            target = np.rad2deg(target_joint_pos).astype('d').tobytes()
+            self.s_out.sendto(target, (self.udp_ip_out, self.udp_port_out_arm))
 
-        if block:
-            self.receiveState()
-            # print("target_joint_pos: ", target_joint_pos)
-            # print("self.joint_pos: ", self.joint_pos)
-
-            while np.linalg.norm(target_joint_pos - self.joint_pos) > 5e-3:
+            if block:
+                self.receiveState()
                 # print("target_joint_pos: ", target_joint_pos)
                 # print("self.joint_pos: ", self.joint_pos)
-                # print(f"Error: {np.linalg.norm(target_joint_pos - self.joint_pos)}")
-                time.sleep(1e-4)
-                self.receiveState()
-            # print("Reach the target joint position.")
+
+                while np.linalg.norm(target_joint_pos - self.joint_pos) > 5e-3:
+                    # print("target_joint_pos: ", target_joint_pos)
+                    # print("self.joint_pos: ", self.joint_pos)
+                    # print(f"Error: {np.linalg.norm(target_joint_pos - self.joint_pos)}")
+                    time.sleep(1e-4)
+                    self.receiveState()
+                # print("Reach the target joint position.")
+                    
+            self.pybullet.setJointPos(self.getJointPos())
+        else:
+            self.pybullet.setJointPos(target_joint_pos)
 
     # ----------------------------------
     def moveToTcpPose(self, target_tcp_pos, target_tcp_quat, block=True):
         target_joint_pos = self.pybullet.inverseKinematics(target_tcp_pos, target_tcp_quat, rest_joint_pos=None)
-        self.moveToJointPos(target_joint_pos, block)
+        if not simulation_only:
+            self.moveToJointPos(target_joint_pos, block)
+        self.pybullet.setJointPos(target_joint_pos)
 
     # ----------------------------------
     def gripperMove(self, block=True):
-        one = np.array([1])
-        zero = np.array([0])
-        self.s_out.sendto(one, (self.udp_ip_out, self.udp_port_out_gripper))
-        time.sleep(0.05)
-        self.s_out.sendto(zero, (self.udp_ip_out, self.udp_port_out_gripper))
+        if not simulation_only:
+            one = np.array([1])
+            zero = np.array([0])
+            self.s_out.sendto(one, (self.udp_ip_out, self.udp_port_out_gripper))
+            time.sleep(0.05)
+            self.s_out.sendto(zero, (self.udp_ip_out, self.udp_port_out_gripper))
 
-        time.sleep(0.3)
+            time.sleep(0.3)
 
-        self.s_out.sendto(one, (self.udp_ip_out, self.udp_port_out_gripper))
-        time.sleep(0.05)
-        self.s_out.sendto(zero, (self.udp_ip_out, self.udp_port_out_gripper))
+            self.s_out.sendto(one, (self.udp_ip_out, self.udp_port_out_gripper))
+            time.sleep(0.05)
+            self.s_out.sendto(zero, (self.udp_ip_out, self.udp_port_out_gripper))
 
-        if block:
-            time.sleep(0.01)
+            if block:
+                time.sleep(0.01)
 
-        # mimic the record of current gripper status
-        self.gripper_close = not self.gripper_close
+            # mimic the record of current gripper status
+            self.gripper_close = not self.gripper_close
+
 
     # ----------------------------------
     def keyboardCommand(self, trans_step_size=0.005, rot_step_size=np.deg2rad(1)):
@@ -308,15 +317,52 @@ class RobotPybullet():
                            parentLinkIndex=self.end_eff_idx, physicsClientId=self._physics_client_id)
         p.addUserDebugLine([0, 0, 0], [0, 0, 0.1], [0, 0, 1], parentObjectUniqueId=self.robot_id,
                            parentLinkIndex=self.end_eff_idx, physicsClientId=self._physics_client_id)
+    
+    def get_current_joint_positions(self):
+        joint_positions = []
+        for joint_id in list(self._joint_name_to_ids.values())[0:6]:
+            joint_positions.append(p.getJointState(self.robot_id, joint_id, physicsClientId=self._physics_client_id)[0])
+        return joint_positions
 
+
+def calculate_orientation_quaternion(finger1_pos, finger2_pos):
+    # Convert positions to numpy arrays
+    p1 = np.array(finger1_pos)
+    p2 = np.array(finger2_pos)
+
+    # Calculate the direction vector from finger1 to finger2
+    direction_vector = p2 - p1
+    direction_vector_normalized = direction_vector / np.linalg.norm(direction_vector)
+
+    # Assuming the reference axis is the x-axis
+    x_axis = np.array([0, 1, 0])
+
+    # Calculate the rotation required to align the x-axis with the direction vector
+    # rotation = R.from_rotvec(np.cross(x_axis, direction_vector_normalized) *
+    #                          np.arccos(np.dot(x_axis, direction_vector_normalized)))
+    #
+    # rotate_y = R.from_euler('y', np.pi)
+    # rotation = rotation * rotate_y
+
+    rot = p.getQuaternionFromAxisAngle(np.cross(x_axis, direction_vector_normalized), np.arccos(np.dot(x_axis, direction_vector_normalized)))
+    rot_y = p.getQuaternionFromAxisAngle([0, 1, 0], np.pi)
+    rot = p.multiplyTransforms([0, 0, 0], rot, [0, 0, 0], rot_y)
+    quaternion = rot[1]
+
+    # Get the quaternion
+    # quaternion = rotation.as_quat()  # returns (x, y, z, w)
+
+    return quaternion
+    
 
 # ------------------------------------------------
 if __name__ == '__main__':
+    simulation_only = False
 
     # right arm
     robot = RobotController(robot_id=1, udp_ip_in="192.168.1.200", udp_port_in=57831,
                             udp_ip_out="192.168.1.100", udp_port_out_arm=3826,
-                            udp_port_out_gripper=3828, simulation_only=True)
+                            udp_port_out_gripper=3828, simulation_only=simulation_only)
 
     # # left arm
     # robot = RobotController(robot_id=2, udp_ip_in="192.168.1.200", udp_port_in=57831,
@@ -327,11 +373,17 @@ if __name__ == '__main__':
 
     # add object
     objects_path = './demo_objects'
-    object_name = 'banana'
-    object_position = [0.4, 0., 0.05]
+    object_name = 'plastic_hammer'
+    # object_position = [0.4, 0., 0.07]   # pill_bottle
+    # object_position = [0.4, 0., 0.085]  # banana
+    object_position = [0.4, 0., 0.095]  # hammer with finger tip
+
 
     language_level = 'simple'
     i, j = 0, 0
+
+    lowerLimits = [-3.14 / 2, -3.14, -3.14, -3.14, -3.14, -3.14, 0.0, 0.0]
+    upperLimits = [3.14 / 2, 3.14, 3.14, 3.14, 3.14, 3.14, 0.025, 0.025]
 
     mesh = trimesh.load(f'{objects_path}/{object_name}/{object_name}.obj')
     vertices = mesh.vertices
@@ -343,110 +395,139 @@ if __name__ == '__main__':
     grasp_positions = pickle.load(open(f'{objects_path}/{object_name}/{language_level}_grasps.pkl', 'rb'))
     print(grasp_positions.shape)
 
-    p1 = grasp_positions[i, j, :3] + object_position
-    p2 = grasp_positions[i, j, 3:] + object_position
-    # p1 = np.array([0.25, -0.05, 0.25])
-    # p2 = np.array([0.35, 0.05, 0.2])
-    ball1 = p.createVisualShape(p.GEOM_SPHERE, radius=0.01, rgbaColor=[1, 0, 0, 1], visualFramePosition=p1)
-    ball2 = p.createVisualShape(p.GEOM_SPHERE, radius=0.01, rgbaColor=[0, 1, 0, 1], visualFramePosition=p2)
-    p.createMultiBody(baseMass=0, baseVisualShapeIndex=ball1, basePosition=[0, 0, 0], baseOrientation=[0, 0, 0, 1])
-    p.createMultiBody(baseMass=0, baseVisualShapeIndex=ball2, basePosition=[0, 0, 0], baseOrientation=[0, 0, 0, 1])
+    
+    # move to initial position
+    if not simulation_only:
+        print('robot tcp pose', robot.getTcpPose())
+        print('moving to initial position')
+        initial_joint_pos = np.array([0.0, 0.0, 0.0, 0.0, -np.pi / 2, 0.0])
+        robot.moveToJointPos(initial_joint_pos, block=True)
+        eef_pos, eef_quat = robot.getTcpPose()
+        last_move_gripper = False
 
+    # print('Start......')
+    # while True:
 
-    def calculate_orientation_quaternion(finger1_pos, finger2_pos):
-        # Convert positions to numpy arrays
-        p1 = np.array(finger1_pos)
-        p2 = np.array(finger2_pos)
+    #     # robot.pybullet.setJointPos(robot.getJointPos())
 
-        # Calculate the direction vector from finger1 to finger2
-        direction_vector = p2 - p1
-        direction_vector_normalized = direction_vector / np.linalg.norm(direction_vector)
+    #     # manual control
+    #     offset, move_gripper, stop = robot.keyboardCommand(trans_step_size=0.005)
+    #     if stop:
+    #         exit()
 
-        # Assuming the reference axis is the x-axis
-        x_axis = np.array([0, 1, 0])
+    #     if np.any(offset != 0):
+    #         next_eef_pos = eef_pos + offset[0:3]
+    #         next_eef_quat = (sciR.from_euler('xyz', offset[3:6]) * sciR.from_quat(eef_quat)).as_quat()
 
-        # Calculate the rotation required to align the x-axis with the direction vector
-        # rotation = R.from_rotvec(np.cross(x_axis, direction_vector_normalized) *
-        #                          np.arccos(np.dot(x_axis, direction_vector_normalized)))
-        #
-        # rotate_y = R.from_euler('y', np.pi)
-        # rotation = rotation * rotate_y
+    #         # target_joint_pos = robot.pybullet.inverseKinematics(next_eef_pos, next_eef_quat, rest_joint_pos=None)
+    #         # # robot.pybullet.setJointPos(target_joint_pos)
+    #         # print('moving to next pose')
+    #         # print(next_eef_pos, next_eef_quat)
 
-        rot = p.getQuaternionFromAxisAngle(np.cross(x_axis, direction_vector_normalized), np.arccos(np.dot(x_axis, direction_vector_normalized)))
-        rot_y = p.getQuaternionFromAxisAngle([0, 1, 0], np.pi)
-        rot = p.multiplyTransforms([0, 0, 0], rot, [0, 0, 0], rot_y)
-        quaternion = rot[1]
+    #         robot.moveToTcpPose(next_eef_pos, next_eef_quat, block=False)
+    #         eef_pos, eef_quat = next_eef_pos, next_eef_quat
+    #     if move_gripper and not last_move_gripper:
+    #         print('moving fingers')
+    #         robot.gripperMove()
+    #     last_move_gripper = move_gripper
+    #     time.sleep(0.1)
 
-        # Get the quaternion
-        # quaternion = rotation.as_quat()  # returns (x, y, z, w)
-
-        return quaternion
-
-
-    eef_pos, eef_quat = robot.pybullet.getTcpPose()
-    target_ee_pos = (p1 + p2) / 2 - [0, 0, 0.015]
-    target_ee_orn = calculate_orientation_quaternion(p1, p2)
-    print(target_ee_pos, target_ee_orn)
-    # target_ee_orn = p.getQuaternionFromEuler([0, 0, 0])
-    lowerLimits = [-3.14 / 2, -3.14, -3.14, -3.14, -3.14, -3.14, 0.0, 0.0]
-    upperLimits = [3.14 / 2, 3.14, 3.14, 3.14, 3.14, 3.14, 0.025, 0.025]
-    ik_rest_poses = np.random.uniform(lowerLimits, upperLimits)
-    target_joint_pos = robot.pybullet.inverseKinematics(target_ee_pos, target_ee_orn, ik_rest_poses.tolist())
-    robot.pybullet.setJointPos(target_joint_pos)
-
-    print(robot.pybullet.getTcpPose())
-
-
-    # initial_joint_pos = np.array([0.0, 0.0, 0.0, 0.0, -np.pi / 2, 0.0])
-    # robot.moveToJointPos(initial_joint_pos, block=True)
-    # eef_pos, eef_quat = robot.getTcpPose()
-    last_move_gripper = False
-
-    print('Start......')
     while True:
-
-        # robot.pybullet.setJointPos(robot.getJointPos())
-
-        offset, move_gripper, stop = robot.keyboardCommand(trans_step_size=0.005)
-
-        if stop:
+        i, j = input('Enter i, j: ').split()
+        i, j = int(i), int(j)
+        print(i, j)
+        if i < 0 or j < 0:
             break
-        else:
-            if np.any(offset != 0):
-                next_eef_pos = eef_pos + offset[0:3]
-                next_eef_quat = (sciR.from_euler('xyz', offset[3:6]) * sciR.from_quat(eef_quat)).as_quat()
+        p1 = grasp_positions[i, j, :3] + object_position
+        p2 = grasp_positions[i, j, 3:] + object_position
+        # p1 = np.array([0.25, -0.05, 0.25])
+        # p2 = np.array([0.35, 0.05, 0.2])
+        ball1 = p.createVisualShape(p.GEOM_SPHERE, radius=0.01, rgbaColor=[1, 0, 0, 1], visualFramePosition=p1)
+        ball2 = p.createVisualShape(p.GEOM_SPHERE, radius=0.01, rgbaColor=[0, 1, 0, 1], visualFramePosition=p2)
+        ball1 = p.createMultiBody(baseMass=0, baseVisualShapeIndex=ball1, basePosition=[0, 0, 0], baseOrientation=[0, 0, 0, 1])
+        ball2 = p.createMultiBody(baseMass=0, baseVisualShapeIndex=ball2, basePosition=[0, 0, 0], baseOrientation=[0, 0, 0, 1])
 
-                target_joint_pos = robot.pybullet.inverseKinematics(next_eef_pos, next_eef_quat, rest_joint_pos=None)
-                robot.pybullet.setJointPos(target_joint_pos)
+        eef_pos, eef_quat = robot.pybullet.getTcpPose()
+        target_grasp_pos = (p1 + p2) / 2
+        target_ee_orn = calculate_orientation_quaternion(p1, p2)
+        # print(target_ee_pos, target_ee_orn)
+        # target_ee_orn = p.getQuaternionFromEuler([0, 0, 0])
 
+        # ik_rest_poses = np.random.uniform(lowerLimits, upperLimits)
+        target_ee_pos = target_grasp_pos + np.array([0, 0, 0.1])
+        ik_rest_poses = robot.pybullet.get_current_joint_positions()
+        target_joint_pos = robot.pybullet.inverseKinematics(target_ee_pos, target_ee_orn, ik_rest_poses)
+        robot.pybullet.setJointPos(target_joint_pos)
+        if input('Press enter to move down') == 'q':
+            break
+        robot.moveToJointPos(target_joint_pos, block=True)
 
-                # robot.moveToTcpPose(next_eef_pos, next_eef_quat, block=False)
-                eef_pos, eef_quat = next_eef_pos, next_eef_quat
-            if move_gripper and not last_move_gripper:
+        input('Press enter to move down')
+        target_ee_pos = target_grasp_pos
+        ik_rest_poses = robot.pybullet.get_current_joint_positions()
+        target_joint_pos = robot.pybullet.inverseKinematics(target_ee_pos, target_ee_orn, ik_rest_poses)
+        robot.moveToJointPos(target_joint_pos, block=True)
+
+        # close gripper
+        while True:
+            command = input('Press enter to close gripper, others to continue')
+            if command == '':
                 robot.gripperMove()
-            last_move_gripper = move_gripper
+                time.sleep(1)
+            else:
+                break
+
+        # move up
+        input('Press enter to move up')
+        target_ee_pos = target_grasp_pos + np.array([0, 0, 0.2])
+        target_joint_pos = robot.pybullet.inverseKinematics(target_ee_pos, target_ee_orn, ik_rest_poses)
+        robot.moveToJointPos(target_joint_pos, block=True)
+
+
+        # open gripper
+        while True:
+            command = input('Press enter to open gripper, others to continue')
+            if command == '':
+                robot.gripperMove()
+                time.sleep(1)
+            else:
+                break
+
+        p.removeBody(ball1)
+        p.removeBody(ball2)
+
+        print('moving to initial position...')
+        if not simulation_only:
+            robot.moveToJointPos(initial_joint_pos, block=True)
+            eef_pos, eef_quat = robot.getTcpPose()
+            last_move_gripper = False
+        else:
+            robot.pybullet.setJointPos(initial_joint_pos)
+
+    
+    # print(robot.pybullet.getTcpPose())
 
 
 
-        # if stop:
-        #     break
-        # else:
-        #     if np.any(offset != 0):
-        #         next_eef_pos = eef_pos + offset[0:3]
-        #         next_eef_quat = (sciR.from_euler('xyz', offset[3:6]) * sciR.from_quat(eef_quat)).as_quat()
-        #         robot.moveToTcpPose(next_eef_pos, next_eef_quat, block=False)
-        #         eef_pos, eef_quat = next_eef_pos, next_eef_quat
-        #     if move_gripper and not last_move_gripper:
-        #         robot.gripperMove()
-        #     last_move_gripper = move_gripper
+    # if stop:
+    #     break
+    # else:
+    #     if np.any(offset != 0):
+    #         next_eef_pos = eef_pos + offset[0:3]
+    #         next_eef_quat = (sciR.from_euler('xyz', offset[3:6]) * sciR.from_quat(eef_quat)).as_quat()
+    #         robot.moveToTcpPose(next_eef_pos, next_eef_quat, block=False)
+    #         eef_pos, eef_quat = next_eef_pos, next_eef_quat
+    #     if move_gripper and not last_move_gripper:
+    #         robot.gripperMove()
+    #     last_move_gripper = move_gripper
 
-        # print("ee_forcetorque: ", robot.getForceTorqueEE()[0:3])
-        # pos, quat = robot.getTcpPose()
-        # print("ee_pos: ", pos)
+    # print("ee_forcetorque: ", robot.getForceTorqueEE()[0:3])
+    # pos, quat = robot.getTcpPose()
+    # print("ee_pos: ", pos)
 
-        # print("isConnected: ", robot.isConnected())
+    # print("isConnected: ", robot.isConnected())
 
-        time.sleep(0.1)
+    # time.sleep(0.1)
 
     # robot.send(target_joints_robot_2=np.asarray([0, 0, 0, 0, -90, 0]))
     # log_save_path = os.path.join(robot.save_folder, 'log.npy')
